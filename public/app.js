@@ -77,6 +77,11 @@
     }, 2800);
   }
 
+  // Dynamic API Base URL (auto-connects to port 3000 if frontend is served via Live Server on port 5500/5173)
+  const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? (window.location.port && window.location.port !== '3000' ? 'http://localhost:3000' : '')
+    : '';
+
   // API Client
   async function api(path, options = {}) {
     const headers = {
@@ -87,8 +92,10 @@
       headers['Authorization'] = `Bearer ${state.token}`;
     }
 
+    const url = path.startsWith('http') ? path : (API_BASE + path);
+
     try {
-      const res = await fetch(path, { ...options, headers });
+      const res = await fetch(url, { ...options, headers });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.msg || data.message || `Request failed (${res.status})`);
@@ -130,7 +137,16 @@
     if (socket) return;
     if (typeof io === 'undefined') return;
 
-    socket = io();
+    try {
+      socket = io(API_BASE || undefined, {
+        transports: ['websocket', 'polling'],
+        reconnectionAttempts: 10,
+        timeout: 10000
+      });
+    } catch (e) {
+      console.warn('Socket initialization failed:', e);
+      return;
+    }
 
     socket.on('connect', () => {
       state.isConnected = true;
@@ -763,6 +779,8 @@
   }
 
   // ==================== CHAT ROOM VIEW ====================
+  let chatPollTimer = null;
+
   async function loadChatRoom(roomId) {
     state.messages = [];
     state.typingUsers = [];
@@ -777,6 +795,24 @@
       if (socket && state.isConnected && state.user) {
         socket.emit('joinRoom', { roomId, userId: state.user.userId });
       }
+
+      // Start fallback polling (ensures real-time messages even on serverless/Vercel)
+      if (chatPollTimer) clearInterval(chatPollTimer);
+      chatPollTimer = setInterval(async () => {
+        if (state.view !== 'chat' || state.currentRoomId !== roomId || !state.token) {
+          clearInterval(chatPollTimer);
+          return;
+        }
+        if (socket && state.isConnected) return; // Socket handles incoming messages
+        try {
+          const fresh = await api(`/api/messages/${roomId}?limit=50&skip=0`);
+          const freshList = fresh.messages || [];
+          if (freshList.length !== state.messages.length) {
+            state.messages = freshList;
+            renderMessages(true);
+          }
+        } catch (e) {}
+      }, 2500);
 
       render();
       scrollMessagesToBottom(false);
@@ -1139,6 +1175,10 @@
   };
 
   window.leaveCurrentRoom = function() {
+    if (chatPollTimer) {
+      clearInterval(chatPollTimer);
+      chatPollTimer = null;
+    }
     if (socket && state.isConnected && state.currentRoomId && state.user) {
       socket.emit('leaveRoom', { roomId: state.currentRoomId, userId: state.user.userId });
     }

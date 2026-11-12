@@ -572,10 +572,16 @@ io.on('connection', socket => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`===============================================`);
-  console.log(`🚀 ChitChat Server listening on http://localhost:${PORT}`);
-  console.log(`📡 Socket.IO real-time engine ready`);
-  console.log(`🔒 Authentication Required: Register or Login to enter`);
-  console.log(`===============================================`);
-});
+if (require.main === module && !process.env.VERCEL) {
+  server.listen(PORT, () => {
+    console.log(`===============================================`);
+    console.log(`🚀 ChitChat Server listening on http://localhost:${PORT}`);
+    console.log(`📡 Socket.IO real-time engine ready`);
+    console.log(`🔒 Authentication Required: Register or Login to enter`);
+    console.log(`===============================================`);
+  });
+}
+
+module.exports = app;
+module.exports.server = server;
+module.exports.io = io;
