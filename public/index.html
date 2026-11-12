@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#050508" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ChitChat" />
+  <title>ChitChat - Real-time Messaging</title>
+  <meta name="description" content="Experience real-time messaging with friends and family. Create rooms, join conversations, and stay connected with our secure chat platform." />
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            cyber: {
+              950: '#030305',
+              900: '#07070a',
+              850: '#0b0b10',
+              800: '#111118',
+              700: '#181824',
+              600: '#222234',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Socket.IO Client -->
+  <script src="/socket.io/socket.io.js"></script>
+
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="bg-cyber-night text-gray-100 min-h-screen selection:bg-indigo-500 selection:text-white">
+  <!-- Aesthetic Dot Grid Overlay -->
+  <div class="aesthetic-dot-grid"></div>
+
+  <!-- Glowing Background Ambient Elements -->
+  <div class="cyber-bg-element-1"></div>
+  <div class="cyber-bg-element-2"></div>
+  <div class="cyber-bg-element-3"></div>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="fixed top-20 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 items-center pointer-events-none"></div>
+
+  <!-- App Mount Point -->
+  <div id="app" class="relative z-10 min-h-screen flex flex-col"></div>
+
+  <!-- Application Logic -->
+  <script src="/app.js"></script>
+</body>
+</html>

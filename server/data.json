@@ -1,0 +1,26 @@
+{
+  "users": [
+    {
+      "_id": "user_725d63b07457",
+      "username": "omkar",
+      "email": "omkarnathprabhujee16@gmail.com",
+      "passwordHash": "$2b$10$qKwIy57MAP0DSsrNAu68PuLERcvqR.PcfggkVSw3otZKdv3F.2F9y",
+      "role": "admin",
+      "createdAt": "2026-11-12T06:35:27.725Z"
+    }
+  ],
+  "rooms": [
+    {
+      "_id": "room_5e0ae1300f5a",
+      "name": "games",
+      "roomCode": "2149C0",
+      "createdBy": "user_725d63b07457",
+      "users": [
+        "user_725d63b07457"
+      ],
+      "isPrivate": false,
+      "createdAt": "2026-11-12T06:41:38.371Z"
+    }
+  ],
+  "messages": []
+}
