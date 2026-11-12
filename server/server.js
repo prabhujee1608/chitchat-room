@@ -184,7 +184,7 @@ app.get('/api/rooms', authMiddleware, (req, res) => {
     return {
       ...room,
       createdBy: populateUser(room.createdBy),
-      users: room.users || []
+      users: (room.users || []).map(u => populateUser(typeof u === 'object' ? u._id : u))
     };
   });
   res.json(roomsWithDetails);
@@ -215,10 +215,16 @@ app.post('/api/rooms', authMiddleware, (req, res) => {
   db.rooms.push(newRoom);
   saveDatabase();
 
-  res.status(201).json({
+  const populatedRoom = {
     ...newRoom,
-    createdBy: populateUser(newRoom.createdBy)
-  });
+    createdBy: populateUser(newRoom.createdBy),
+    users: [populateUser(req.user.userId)]
+  };
+
+  // Notify all connected clients of new room
+  io.emit('roomCreated', populatedRoom);
+
+  res.status(201).json(populatedRoom);
 });
 
 // Rooms: Get single
@@ -229,7 +235,8 @@ app.get('/api/rooms/:id', authMiddleware, (req, res) => {
   }
 
   // Auto-add current user if not in users list
-  if (!room.users.includes(req.user.userId)) {
+  const isMember = room.users.some(u => (typeof u === 'object' ? u._id : u) === req.user.userId);
+  if (!isMember) {
     room.users.push(req.user.userId);
     saveDatabase();
   }
@@ -237,7 +244,7 @@ app.get('/api/rooms/:id', authMiddleware, (req, res) => {
   res.json({
     ...room,
     createdBy: populateUser(room.createdBy),
-    users: room.users.map(populateUser)
+    users: room.users.map(u => populateUser(typeof u === 'object' ? u._id : u))
   });
 });
 
@@ -253,7 +260,8 @@ app.post('/api/rooms/join', authMiddleware, (req, res) => {
     return res.status(404).json({ msg: 'Invalid room code' });
   }
 
-  if (!room.users.includes(req.user.userId)) {
+  const isMember = room.users.some(u => (typeof u === 'object' ? u._id : u) === req.user.userId);
+  if (!isMember) {
     room.users.push(req.user.userId);
     saveDatabase();
   }
@@ -261,7 +269,7 @@ app.post('/api/rooms/join', authMiddleware, (req, res) => {
   res.json({
     ...room,
     createdBy: populateUser(room.createdBy),
-    users: room.users.map(populateUser)
+    users: room.users.map(u => populateUser(typeof u === 'object' ? u._id : u))
   });
 });
 
@@ -345,12 +353,19 @@ app.post('/api/messages/:roomId', authMiddleware, (req, res) => {
     return res.status(400).json({ msg: 'Message content is required' });
   }
 
-  const room = db.rooms.find(r => r._id === roomId);
+  const room = db.rooms.find(r => r._id === roomId || r.roomCode === roomId);
   if (!room) return res.status(404).json({ msg: 'Room not found' });
+
+  // Ensure sender is enrolled in the room
+  const isMember = room.users.some(u => (typeof u === 'object' ? u._id : u) === req.user.userId);
+  if (!isMember) {
+    room.users.push(req.user.userId);
+    saveDatabase();
+  }
 
   const newMessage = {
     _id: 'msg_' + crypto.randomBytes(6).toString('hex'),
-    roomId,
+    roomId: room._id,
     sender: {
       _id: req.user.userId,
       username: req.user.username,
@@ -365,7 +380,35 @@ app.post('/api/messages/:roomId', authMiddleware, (req, res) => {
   db.messages.push(newMessage);
   saveDatabase();
 
+  // Instant broadcast to all clients in the room via Socket.IO
+  io.to(room._id).emit('newMessage', newMessage);
+
   res.status(201).json(newMessage);
+});
+
+// Messages: React
+app.post('/api/messages/:roomId/:messageId/reaction', authMiddleware, (req, res) => {
+  const { messageId } = req.params;
+  const { reaction } = req.body;
+  const msg = db.messages.find(m => m._id === messageId);
+  if (!msg) return res.status(404).json({ msg: 'Message not found' });
+
+  if (!msg.reactions) msg.reactions = {};
+  if (msg.reactions[req.user.userId] === reaction) {
+    delete msg.reactions[req.user.userId];
+  } else {
+    msg.reactions[req.user.userId] = reaction;
+  }
+  saveDatabase();
+
+  io.to(msg.roomId).emit('reaction', {
+    messageId,
+    userId: req.user.userId,
+    reaction: msg.reactions[req.user.userId] || null,
+    reactions: msg.reactions
+  });
+
+  res.json({ messageId, reactions: msg.reactions });
 });
 
 // Messages: Delete (soft delete)
@@ -470,32 +513,44 @@ io.on('connection', socket => {
 
   socket.on('joinRoom', ({ roomId, userId }) => {
     if (!roomId || !userId) return;
-    socket.join(roomId);
+    const room = db.rooms.find(r => r._id === roomId || r.roomCode === roomId);
+    const actualId = room ? room._id : roomId;
 
-    if (!roomActiveUsers.has(roomId)) {
-      roomActiveUsers.set(roomId, new Set());
+    socket.join(actualId);
+    if (room && room.roomCode) {
+      socket.join(room.roomCode);
     }
-    roomActiveUsers.get(roomId).add(userId);
+
+    if (!roomActiveUsers.has(actualId)) {
+      roomActiveUsers.set(actualId, new Set());
+    }
+    roomActiveUsers.get(actualId).add(userId);
 
     const user = populateUser(userId);
-    socket.to(roomId).emit('userJoined', {
+    socket.to(actualId).emit('userJoined', {
       userId: user._id,
       username: user.username
     });
 
-    io.to(roomId).emit('userList', getOnlineUserIds());
+    io.to(actualId).emit('userList', getOnlineUserIds());
   });
 
   socket.on('leaveRoom', ({ roomId, userId }) => {
     if (!roomId || !userId) return;
-    socket.leave(roomId);
+    const room = db.rooms.find(r => r._id === roomId || r.roomCode === roomId);
+    const actualId = room ? room._id : roomId;
 
-    if (roomActiveUsers.has(roomId)) {
-      roomActiveUsers.get(roomId).delete(userId);
+    socket.leave(actualId);
+    if (room && room.roomCode) {
+      socket.leave(room.roomCode);
+    }
+
+    if (roomActiveUsers.has(actualId)) {
+      roomActiveUsers.get(actualId).delete(userId);
     }
 
     const user = populateUser(userId);
-    socket.to(roomId).emit('userLeft', {
+    socket.to(actualId).emit('userLeft', {
       userId: user._id,
       username: user.username
     });

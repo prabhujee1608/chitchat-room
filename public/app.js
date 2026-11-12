@@ -174,9 +174,17 @@
 
     socket.on('newMessage', (msg) => {
       if (state.currentRoomId === msg.roomId) {
-        state.messages.push(msg);
-        playChime();
-        renderMessages(true);
+        if (!state.messages.some(m => m._id === msg._id)) {
+          state.messages.push(msg);
+          playChime();
+          renderMessages(true);
+        }
+      }
+    });
+
+    socket.on('roomCreated', () => {
+      if (state.view === 'home') {
+        loadRooms();
       }
     });
 
@@ -456,23 +464,46 @@
               </button>
             </div>
           ` : `
-            <!-- Create Room Quick Box -->
-            <div class="max-w-md mx-auto glass-card p-4 sm:p-5 mb-10 text-left">
-              <h3 class="text-sm font-bold text-gray-200 mb-3 flex items-center gap-2">
-                <i data-lucide="plus-circle" class="w-4 h-4 text-blue-400"></i> Create New Chat Room
-              </h3>
-              <form onsubmit="handleCreateRoom(event)" class="flex gap-2">
-                <input
-                  id="new-room-name"
-                  type="text"
-                  required
-                  placeholder="Enter room name (e.g. Friends Hub)..."
-                  class="flex-1 glass-input px-3.5 py-2.5 rounded-xl text-sm"
-                />
-                <button type="submit" class="gradient-btn-primary px-4 py-2.5 rounded-xl text-sm whitespace-nowrap">
-                  Create Room
-                </button>
-              </form>
+            <!-- Room Action Hub (Create or Join) -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl mx-auto mb-10 text-left">
+              <!-- Create Room Quick Box -->
+              <div class="glass-card p-4 sm:p-5">
+                <h3 class="text-sm font-bold text-gray-200 mb-2.5 flex items-center gap-2">
+                  <i data-lucide="plus-circle" class="w-4 h-4 text-blue-400"></i> Create New Room
+                </h3>
+                <form onsubmit="handleCreateRoom(event)" class="flex gap-2">
+                  <input
+                    id="new-room-name"
+                    type="text"
+                    required
+                    placeholder="Enter room name..."
+                    class="flex-1 glass-input px-3.5 py-2.5 rounded-xl text-sm"
+                  />
+                  <button type="submit" class="gradient-btn-primary px-4 py-2.5 rounded-xl text-sm whitespace-nowrap font-semibold">
+                    Create
+                  </button>
+                </form>
+              </div>
+
+              <!-- Join by Code Quick Box -->
+              <div class="glass-card p-4 sm:p-5">
+                <h3 class="text-sm font-bold text-gray-200 mb-2.5 flex items-center gap-2">
+                  <i data-lucide="key-round" class="w-4 h-4 text-indigo-400"></i> Join Room by Code
+                </h3>
+                <form onsubmit="handleQuickCodeJoin(event)" class="flex gap-2">
+                  <input
+                    id="quick-join-code"
+                    type="text"
+                    required
+                    maxlength="10"
+                    placeholder="e.g. 2149C0"
+                    class="flex-1 glass-input px-3.5 py-2.5 rounded-xl text-sm font-mono uppercase tracking-wider text-center"
+                  />
+                  <button type="submit" class="gradient-btn-secondary px-4 py-2.5 rounded-xl text-sm whitespace-nowrap font-semibold">
+                    Join
+                  </button>
+                </form>
+              </div>
             </div>
           `}
         </section>
@@ -648,29 +679,76 @@
     }
   };
 
+  window.handleQuickCodeJoin = async function(e) {
+    e.preventDefault();
+    const input = document.getElementById('quick-join-code');
+    if (!input || !input.value.trim()) return;
+    try {
+      const room = await api('/api/rooms/join', {
+        method: 'POST',
+        body: JSON.stringify({ roomCode: input.value.trim().toUpperCase() })
+      });
+      showToast(`Joined "${room.name}"!`, 'success');
+      await loadRooms();
+      navigate('chat', room._id);
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  window.handleQuickJoinRoom = async function(roomId, e) {
+    if (e) e.stopPropagation();
+    try {
+      const room = await api(`/api/rooms/${roomId}`);
+      showToast(`Joined "${room.name}"!`, 'success');
+      await loadRooms();
+      navigate('chat', room._id);
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+
   function renderRoomLists() {
     const container = document.getElementById('rooms-sections-container');
     if (!container || !state.user) return;
 
-    const myRooms = state.rooms.filter(r => (r.createdBy._id || r.createdBy) === state.user.userId);
-    const joinedRooms = state.rooms.filter(r => (r.createdBy._id || r.createdBy) !== state.user.userId && (r.users || []).includes(state.user.userId));
-    const availableRooms = state.rooms.filter(r => (r.createdBy._id || r.createdBy) !== state.user.userId && !(r.users || []).includes(state.user.userId));
+    const currentUserId = state.user.userId || state.user._id;
+
+    function getOwnerId(room) {
+      return (typeof room.createdBy === 'object' && room.createdBy) ? (room.createdBy._id || room.createdBy.userId) : room.createdBy;
+    }
+
+    function getUserIds(room) {
+      return (room.users || []).map(u => (typeof u === 'object' && u ? (u._id || u.userId) : u));
+    }
+
+    const myRooms = state.rooms.filter(r => getOwnerId(r) === currentUserId);
+    const joinedRooms = state.rooms.filter(r => {
+      const isOwner = getOwnerId(r) === currentUserId;
+      const members = getUserIds(r);
+      return !isOwner && members.includes(currentUserId);
+    });
+    const availableRooms = state.rooms.filter(r => {
+      const isOwner = getOwnerId(r) === currentUserId;
+      const members = getUserIds(r);
+      return !isOwner && !members.includes(currentUserId);
+    });
 
     function makeCard(room, type) {
-      const isOwner = (room.createdBy._id || room.createdBy) === state.user.userId;
+      const isOwner = getOwnerId(room) === currentUserId;
       const memberCount = (room.users || []).length;
       const ownerName = room.createdBy?.username || (isOwner ? state.user.username : 'User');
 
       return `
-        <div onclick="navigate('chat', '${room._id}')" class="glass-card p-5 hover:border-blue-500/40 hover:-translate-y-1 transition-all duration-300 cursor-pointer flex flex-col justify-between group">
+        <div onclick="navigate('chat', '${room._id}')" class="glass-card p-5 hover:border-indigo-500/40 hover:-translate-y-1 transition-all duration-300 cursor-pointer flex flex-col justify-between group">
           <div>
             <div class="flex items-start justify-between gap-2 mb-3">
               <div class="flex items-center gap-2 min-w-0">
-                <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-purple-600 text-white font-bold flex items-center justify-center text-xs flex-shrink-0">
+                <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-indigo-600 to-purple-600 text-white font-bold flex items-center justify-center text-xs flex-shrink-0">
                   ${escapeHtml(room.name.charAt(0).toUpperCase())}
                 </div>
                 <div class="min-w-0">
-                  <h4 class="font-bold text-white text-base truncate group-hover:text-blue-300 transition-colors flex items-center gap-1.5">
+                  <h4 class="font-bold text-white text-base truncate group-hover:text-indigo-300 transition-colors flex items-center gap-1.5">
                     ${escapeHtml(room.name)}
                     ${isOwner ? '<span title="You own this room" class="text-amber-400 text-xs">👑</span>' : ''}
                   </h4>
@@ -701,8 +779,8 @@
               <i data-lucide="share-2" class="w-3 h-3"></i>
             </button>
             ${type === 'available' ? `
-              <button onclick="openJoinModal(${JSON.stringify(room).replace(/"/g, '&quot;')})" class="flex-1 gradient-btn-primary py-1.5 text-xs rounded-lg flex items-center justify-center gap-1.5 font-semibold">
-                Join
+              <button onclick="handleQuickJoinRoom('${room._id}', event)" class="flex-1 gradient-btn-primary py-1.5 text-xs rounded-lg flex items-center justify-center gap-1.5 font-semibold">
+                Join Room
               </button>
             ` : `
               <button onclick="navigate('chat', '${room._id}')" class="flex-1 gradient-btn-primary py-1.5 text-xs rounded-lg flex items-center justify-center gap-1.5 font-semibold">
@@ -1092,7 +1170,7 @@
     input.value = '';
     input.focus();
 
-    if (socket && state.isConnected) {
+    if (socket && state.isConnected && state.user) {
       socket.emit('stopTyping', { roomId: state.currentRoomId, userId: state.user.userId });
     }
 
@@ -1101,25 +1179,49 @@
         method: 'POST',
         body: JSON.stringify({ content })
       });
-      state.messages.push(msg);
+
+      if (!state.messages.some(m => m._id === msg._id)) {
+        state.messages.push(msg);
+        renderMessages(true);
+      }
 
       if (socket && state.isConnected) {
         socket.emit('broadcastMessage', { roomId: state.currentRoomId, message: msg });
       }
-
-      renderMessages(true);
     } catch (err) {
       showToast(err.message, 'error');
     }
   };
 
   window.handleReaction = async function(messageId, reaction) {
-    if (!socket || !state.user) return;
-    socket.emit('reaction', {
-      messageId,
-      userId: state.user.userId,
-      reaction
-    });
+    if (!state.user || !state.currentRoomId) return;
+
+    // Instant local reaction toggle for instant responsive feel
+    const msg = state.messages.find(m => m._id === messageId);
+    if (msg) {
+      if (!msg.reactions) msg.reactions = {};
+      if (msg.reactions[state.user.userId] === reaction) {
+        delete msg.reactions[state.user.userId];
+      } else {
+        msg.reactions[state.user.userId] = reaction;
+      }
+      renderMessages(false);
+    }
+
+    if (socket && state.isConnected) {
+      socket.emit('reaction', {
+        messageId,
+        userId: state.user.userId,
+        reaction
+      });
+    }
+
+    try {
+      await api(`/api/messages/${state.currentRoomId}/${messageId}/reaction`, {
+        method: 'POST',
+        body: JSON.stringify({ reaction })
+      });
+    } catch (e) {}
   };
 
   window.copyMessageText = async function(content) {
@@ -1305,10 +1407,18 @@
 
   function scrollMessagesToBottom(smooth = true) {
     setTimeout(() => {
-      window.scrollTo({
-        top: document.body.scrollHeight,
-        behavior: smooth ? 'smooth' : 'auto'
-      });
+      const container = document.getElementById('messages-container');
+      if (container && container.lastElementChild) {
+        container.lastElementChild.scrollIntoView({
+          behavior: smooth ? 'smooth' : 'auto',
+          block: 'end'
+        });
+      } else {
+        window.scrollTo({
+          top: document.body.scrollHeight,
+          behavior: smooth ? 'smooth' : 'auto'
+        });
+      }
     }, 60);
   }
 
@@ -1342,26 +1452,30 @@
 
   function renderSidebarMembersHtml() {
     if (!state.currentRoom || !state.currentRoom.users) return '';
-    const roomOwnerId = state.currentRoom.createdBy?._id || state.currentRoom.createdBy;
+    const roomOwnerId = (typeof state.currentRoom.createdBy === 'object' && state.currentRoom.createdBy) 
+      ? (state.currentRoom.createdBy._id || state.currentRoom.createdBy.userId)
+      : state.currentRoom.createdBy;
     const canManage = (state.user && state.user.userId === roomOwnerId) || (state.user && state.user.role === 'admin');
 
     return state.currentRoom.users.map(u => {
-      const isOnline = state.onlineUsers.includes(u._id);
-      const isUserOwner = u._id === roomOwnerId;
-      const isMe = state.user && state.user.userId === u._id;
+      const uId = typeof u === 'object' ? (u._id || u.userId) : u;
+      const uName = typeof u === 'object' ? (u.username || 'User') : 'User';
+      const isOnline = state.onlineUsers.includes(uId);
+      const isUserOwner = uId === roomOwnerId;
+      const isMe = state.user && state.user.userId === uId;
 
       return `
         <div class="flex items-center justify-between p-2.5 rounded-xl bg-white/5 border border-white/5 hover:border-white/10 transition-all">
           <div class="flex items-center gap-2.5 min-w-0">
             <div class="relative flex-shrink-0">
-              <div class="w-8 h-8 rounded-full bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold text-xs flex items-center justify-center">
-                ${escapeHtml((u.username || 'U').charAt(0).toUpperCase())}
+              <div class="w-8 h-8 rounded-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold text-xs flex items-center justify-center">
+                ${escapeHtml((uName).charAt(0).toUpperCase())}
               </div>
               <span class="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-black ${isOnline ? 'bg-emerald-400' : 'bg-gray-500'}"></span>
             </div>
             <div class="min-w-0">
               <p class="text-xs font-semibold text-white truncate flex items-center gap-1">
-                ${escapeHtml(u.username)}
+                ${escapeHtml(uName)}
                 ${isMe ? '<span class="text-[10px] text-gray-400 font-normal">(You)</span>' : ''}
                 ${isUserOwner ? '<span title="Room Owner" class="text-amber-400 text-xs">👑</span>' : ''}
               </p>
@@ -1372,7 +1486,7 @@
           </div>
 
           ${canManage && !isMe ? `
-            <button onclick="removeUserFromRoom('${u._id}')" title="Remove User" class="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors">
+            <button onclick="removeUserFromRoom('${uId}')" title="Remove User" class="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors">
               <i data-lucide="user-minus" class="w-4 h-4"></i>
             </button>
           ` : ''}
